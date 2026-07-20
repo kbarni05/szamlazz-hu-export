@@ -4,7 +4,7 @@ Tampermonkey userscript kimenő számlák és nyugták Excelbe másolható expor
 
 ## Telepítés
 
-Nyisd meg a nyers userscript URL-jét, majd fogadd el a telepítést a Tampermonkeyben:
+
 
 https://raw.githubusercontent.com/kbarni05/szamlazz-hu-export/main/szamlazz-export.user.js
 
