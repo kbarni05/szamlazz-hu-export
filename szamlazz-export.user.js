@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.0.0
+// @version      3.0.1
 // @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja dátumszűréssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
@@ -200,17 +200,71 @@
 
   function parseNumber(value) {
     if (!hasValue(value)) return null;
+    value = unwrapAmount(value);
+    if (!hasValue(value)) return null;
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
-    let text = String(value).trim().replace(/\s/g, "").replace(/Ft/gi, "");
+    let text = String(value)
+      .trim()
+      .replace(/[\s\u00a0\u202f]/g, "")
+      .replace(/(?:Ft|HUF)/gi, "")
+      .replace(/[’']/g, "");
     if (text.includes(",") && text.includes(".")) {
       text = text.lastIndexOf(",") > text.lastIndexOf(".")
         ? text.replace(/\./g, "").replace(",", ".")
         : text.replace(/,/g, "");
     } else if (text.includes(",")) {
-      text = text.replace(",", ".");
+      text = /^-?\d{1,3}(?:,\d{3})+$/.test(text)
+        ? text.replace(/,/g, "")
+        : text.replace(",", ".");
+    } else if (/^-?\d{1,3}(?:\.\d{3})+$/.test(text)) {
+      text = text.replace(/\./g, "");
     }
     const number = Number(text);
     return Number.isFinite(number) ? number : null;
+  }
+
+  function unwrapAmount(value) {
+    if (!value || typeof value !== "object") return value;
+    for (const key of [
+      "value", "amount", "osszeg", "ertek", "huf", "valueHuf",
+      "amountHuf", "numericValue", "numberValue"
+    ]) {
+      if (hasValue(value[key]) && typeof value[key] !== "object") return value[key];
+    }
+    return "";
+  }
+
+  function normalizeFieldName(value) {
+    return String(value)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]/gi, "")
+      .toLowerCase();
+  }
+
+  function findAmount(root, candidateKeys) {
+    const wanted = new Set(candidateKeys.map(normalizeFieldName));
+    const visited = new Set();
+
+    function walk(value) {
+      if (!value || typeof value !== "object" || visited.has(value)) return "";
+      visited.add(value);
+
+      for (const [key, child] of Object.entries(value)) {
+        if (wanted.has(normalizeFieldName(key))) {
+          const amount = unwrapAmount(child);
+          if (hasValue(amount) && parseNumber(amount) !== null) return amount;
+        }
+      }
+
+      for (const child of Object.values(value)) {
+        const amount = walk(child);
+        if (hasValue(amount)) return amount;
+      }
+      return "";
+    }
+
+    return walk(root);
   }
 
   function roundAmount(value, mode) {
@@ -357,11 +411,24 @@
     || deepFindValue(item, [/^teljdat$/, /teljesitesdat/, /fulfillmentdate/]);
   const invoiceDueDate = (szfej, item) => firstExisting(szfej, ["fizHat", "fizHDat", "fizHatarido", "fizetesiHatarido", "fizDat", "dueDate"])
     || deepFindValue(item, [/^fizhat$/, /^fizhdat$/, /fizhatarido/, /duedate/]);
-  const invoiceNet = szfej => firstExisting(szfej, ["netOssz", "netto", "nettoOsszeg", "nettoErtek", "osszegNetto"]);
-  const invoiceVat = (szfej, item) => firstExisting(szfej, ["afaOssz", "afa", "afaOsszeg", "afaErtek", "osszegAfa"])
-    || deepFindValue(item, [/^afaossz$/, /^afaosszeg$/, /^vatamount$/]);
-  const invoiceGross = (szfej, item) => firstExisting(szfej, ["brOssz", "brutto", "bruttoOsszeg", "bruttoErtek", "vegOssz", "fizetendoOssz"])
-    || deepFindValue(item, [/^brossz$/, /^bruttoosszeg$/, /^vegossz$/, /^grossamount$/]);
+  const NET_KEYS = [
+    "netOssz", "nettOssz", "nettoOssz", "netto", "nettoOsszeg",
+    "nettoErtek", "osszegNetto", "osszesenNetto", "mindosszesenNetto",
+    "netAmount", "netValue", "nettoHuf", "netOsszHuf"
+  ];
+  const VAT_KEYS = [
+    "afaOssz", "áfaOssz", "afa", "áfa", "afaOsszeg", "áfaÖsszeg",
+    "afaErtek", "osszegAfa", "osszesenAfa", "vat", "vatAmount", "vatValue"
+  ];
+  const GROSS_KEYS = [
+    "brOssz", "bruttOssz", "bruttoOssz", "brutto", "bruttoOsszeg",
+    "bruttoErtek", "osszegBrutto", "osszesenBrutto", "mindosszesenBrutto",
+    "vegOssz", "fizetendoOssz", "grossAmount", "grossValue", "bruttoHuf"
+  ];
+
+  const invoiceNet = (szfej, item) => findAmount({ szfej, item }, NET_KEYS);
+  const invoiceVat = (szfej, item) => findAmount({ szfej, item }, VAT_KEYS);
+  const invoiceGross = (szfej, item) => findAmount({ szfej, item }, GROSS_KEYS);
 
   function receiptNumber(nyfej, item) {
     return firstExisting(nyfej, ["nyugtaszam", "nyugtaSzam", "bizonylatszam"])
@@ -374,9 +441,9 @@
     || deepFindValue(item, [/^keltdat$/, /keltdatum/, /issuedate/]);
   const receiptFulfillmentDate = nyfej => firstExisting(nyfej, ["teljDat", "teljDatum", "teljesitesDat", "teljesitesDatum"]);
   const receiptDueDate = nyfej => firstExisting(nyfej, ["fizHat", "fizHDat", "fizHatarido", "fizetesiHatarido"]);
-  const receiptNet = nyfej => firstExisting(nyfej, ["netto", "netOssz", "nettoOsszeg", "nettoErtek"]);
-  const receiptVat = nyfej => firstExisting(nyfej, ["afa", "afaOssz", "afaOsszeg", "afaErtek"]);
-  const receiptGross = nyfej => firstExisting(nyfej, ["brutto", "brOssz", "bruttoOsszeg", "bruttoErtek"]);
+  const receiptNet = (nyfej, item) => findAmount({ nyfej, item }, NET_KEYS);
+  const receiptVat = (nyfej, item) => findAmount({ nyfej, item }, VAT_KEYS);
+  const receiptGross = (nyfej, item) => findAmount({ nyfej, item }, GROSS_KEYS);
 
   function resolveAmounts(netRaw, vatRaw, grossRaw, fallbackVatRate, roundingMode) {
     let net = parseNumber(netRaw);
@@ -409,8 +476,8 @@
   function makeRow(mode, item, fallbackVatRate, roundingMode) {
     const head = mode === "invoice" ? item.szfej || {} : item.nyfej || {};
     const amounts = mode === "invoice"
-      ? resolveAmounts(invoiceNet(head), invoiceVat(head, item), invoiceGross(head, item), fallbackVatRate, roundingMode)
-      : resolveAmounts(receiptNet(head), receiptVat(head), receiptGross(head), fallbackVatRate, roundingMode);
+      ? resolveAmounts(invoiceNet(head, item), invoiceVat(head, item), invoiceGross(head, item), fallbackVatRate, roundingMode)
+      : resolveAmounts(receiptNet(head, item), receiptVat(head, item), receiptGross(head, item), fallbackVatRate, roundingMode);
 
     const number = mode === "invoice" ? invoiceNumber(head, item) : receiptNumber(head, item);
     const customer = mode === "invoice" ? invoiceCustomer(head, item) : receiptCustomer(head, item);
