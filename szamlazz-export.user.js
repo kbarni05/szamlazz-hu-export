@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.0.1
-// @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja dátumszűréssel és opcionális ÁFA-számítással
+// @version      3.1.0
+// @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja választható dátumalappal, rendezéssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
 // @supportURL   https://github.com/kbarni05/szamlazz-hu-export/issues
@@ -24,6 +24,8 @@
     vatMode: "szamlazz_export_vat_mode",
     customVatRate: "szamlazz_export_custom_vat_rate",
     roundingMode: "szamlazz_export_rounding_mode",
+    dateBasis: "szamlazz_export_date_basis",
+    sortDirection: "szamlazz_export_sort_direction",
     minimized: "szamlazz_export_minimized"
   };
 
@@ -31,7 +33,6 @@
     invoicePageSize: 50,
     receiptPageSize: 50,
     maxPages: 500,
-    reverseOrder: true,
     amountTolerance: 1
   };
 
@@ -299,6 +300,43 @@
     return date ? `="${date}"` : "";
   };
 
+  function rowBasisDate(row, dateBasis) {
+    return dateBasis === "fulfillment" ? row.fulfillmentDate : row.issueDate;
+  }
+
+  function validPlainDate(value) {
+    const date = plainDate(value);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+  }
+
+  function dateBasisLabel(dateBasis) {
+    return dateBasis === "fulfillment" ? "Teljesítés dátuma" : "Keltezés dátuma";
+  }
+
+  function sortDirectionLabel(sortDirection) {
+    return sortDirection === "asc" ? "Legrégebbi elöl" : "Legújabb elöl";
+  }
+
+  function sortRowsByDate(rows, dateBasis, sortDirection) {
+    return [...rows].sort((left, right) => {
+      const leftDate = validPlainDate(rowBasisDate(left, dateBasis));
+      const rightDate = validPlainDate(rowBasisDate(right, dateBasis));
+
+      if (!leftDate && !rightDate) {
+        return String(left.number).localeCompare(String(right.number), "hu", { numeric: true });
+      }
+      if (!leftDate) return 1;
+      if (!rightDate) return -1;
+
+      let result = leftDate.localeCompare(rightDate);
+      if (sortDirection === "desc") result *= -1;
+      if (result !== 0) return result;
+
+      result = String(left.number).localeCompare(String(right.number), "hu", { numeric: true });
+      return sortDirection === "desc" ? -result : result;
+    });
+  }
+
   function formatYmd(date) {
     return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
   }
@@ -501,7 +539,7 @@
     };
   }
 
-  async function exportMode(mode, range, fallbackVatRate, roundingMode, log, signal) {
+  async function exportMode(mode, range, fallbackVatRate, roundingMode, dateBasis, sortDirection, log, signal) {
     const isInvoice = mode === "invoice";
     const pageSize = isInvoice ? CONFIG.invoicePageSize : CONFIG.receiptPageSize;
     const url = isInvoice ? API.invoice : API.receipt;
@@ -510,10 +548,11 @@
     const signatures = new Set();
     let fetchedCount = 0;
     let expectedTotal = null;
+    let missingBasisDateCount = 0;
 
     for (let page = 0; page < CONFIG.maxPages; page++) {
       if (signal.aborted) throw new DOMException("Megszakítva", "AbortError");
-      log(`${isInvoice ? "Számlák" : "Nyugták"} lekérése: ${page + 1}. oldal\nEddig lekérve: ${fetchedCount} db`);
+      log(`${isInvoice ? "Számlák" : "Nyugták"} lekérése: ${page + 1}. oldal\nEddig lekérve: ${fetchedCount} db\nDátum alapja: ${dateBasisLabel(dateBasis)}`);
       const body = isInvoice
         ? { kimeno: true, page, pageSize, orderBy: { orderBy: "ORDERBY_KELTDAT", ascending: false } }
         : { searchKey: "", page, pageSize };
@@ -533,18 +572,23 @@
       fetchedCount += items.length;
 
       for (const item of items) {
-        const head = isInvoice ? item.szfej || {} : item.nyfej || {};
-        const issueDate = isInvoice ? invoiceIssueDate(head, item) : receiptIssueDate(head, item);
-        if (isDateInRange(issueDate, range)) rows.push(makeRow(mode, item, fallbackVatRate, roundingMode));
+        const row = makeRow(mode, item, fallbackVatRate, roundingMode);
+        const basisDate = rowBasisDate(row, dateBasis);
+        if (!validPlainDate(basisDate)) missingBasisDateCount++;
+        if (isDateInRange(basisDate, range)) rows.push(row);
       }
 
-      log(`${isInvoice ? "Számlák" : "Nyugták"} lekérve: ${fetchedCount}${expectedTotal !== null ? ` / ${expectedTotal}` : ""}\nSzűrés után: ${rows.length} db`);
+      log(`${isInvoice ? "Számlák" : "Nyugták"} lekérve: ${fetchedCount}${expectedTotal !== null ? ` / ${expectedTotal}` : ""}\nSzűrés után: ${rows.length} db\nDátum alapja: ${dateBasisLabel(dateBasis)}`);
       if (!hasNext(data, items, fetchedCount, pageSize)) break;
       await sleep(100);
     }
 
-    if (CONFIG.reverseOrder) rows.reverse();
-    return { rows, fetchedCount, expectedTotal };
+    return {
+      rows: sortRowsByDate(rows, dateBasis, sortDirection),
+      fetchedCount,
+      expectedTotal,
+      missingBasisDateCount
+    };
   }
 
   function buildOutput(mode, rows) {
@@ -577,13 +621,15 @@
     }
   }
 
-  function analyzeRows(rows, result, range) {
+  function analyzeRows(rows, result, range, dateBasis) {
     const issues = [];
     const warnings = [];
     const seen = new Map();
     const missing = { number: 0, issue: 0, net: 0, vat: 0, gross: 0 };
     const sources = { api: 0, calculated: 0, partial: 0, incomplete: 0 };
     let totalNet = 0, totalVat = 0, totalGross = 0, mismatches = 0;
+    let earliestDate = "";
+    let latestDate = "";
 
     for (const row of rows) {
       if (!row.number) missing.number++;
@@ -598,6 +644,12 @@
       if (row.netNumber !== null && row.vatNumber !== null && row.grossNumber !== null
         && Math.abs(row.grossNumber - row.netNumber - row.vatNumber) > CONFIG.amountTolerance) mismatches++;
       if (row.number) seen.set(row.number, (seen.get(row.number) || 0) + 1);
+
+      const selectedDate = validPlainDate(rowBasisDate(row, dateBasis));
+      if (selectedDate) {
+        if (!earliestDate || selectedDate < earliestDate) earliestDate = selectedDate;
+        if (!latestDate || selectedDate > latestDate) latestDate = selectedDate;
+      }
     }
 
     const duplicates = [...seen.entries()].filter(([, count]) => count > 1);
@@ -614,8 +666,16 @@
     }
     if (sources.calculated) warnings.push(`${sources.calculated} sornál a kiválasztott ÁFA-kulcs alapján történt a számítás.`);
     if (sources.partial) warnings.push(`${sources.partial} sornál meglévő összegekből lett kiszámítva a hiányzó érték.`);
-    if (range.from || range.to) warnings.push(`Alkalmazott keltezési szűrés: ${range.from || "eleje"} – ${range.to || "vége"}.`);
-    return { issues, warnings, sources, totalNet, totalVat, totalGross, ok: issues.length === 0 };
+    if (result.missingBasisDateCount) {
+      warnings.push(range.from || range.to
+        ? `${result.missingBasisDateCount} lekért tételnél nincs ${dateBasisLabel(dateBasis).toLowerCase()}, ezért ezek nem kerülhettek bele a dátumszűrésbe.`
+        : `${result.missingBasisDateCount} tételnél nincs ${dateBasisLabel(dateBasis).toLowerCase()}, ezért ezek a rendezett lista végére kerültek.`);
+    }
+    if (range.from || range.to) warnings.push(`Alkalmazott szűrés (${dateBasisLabel(dateBasis)}): ${range.from || "eleje"} – ${range.to || "vége"}.`);
+    return {
+      issues, warnings, sources, totalNet, totalVat, totalGross,
+      earliestDate, latestDate, ok: issues.length === 0
+    };
   }
 
   function previewRowsHtml(rows) {
@@ -629,9 +689,9 @@
     ).join("");
   }
 
-  function showPreview(mode, result, range, filterLabel, fallbackVatRate, roundingMode) {
+  function showPreview(mode, result, range, filterLabel, fallbackVatRate, roundingMode, dateBasis, sortDirection) {
     return new Promise(resolve => {
-      const analysis = analyzeRows(result.rows, result, range);
+      const analysis = analyzeRows(result.rows, result, range, dateBasis);
       const overlay = document.createElement("div");
       overlay.style.cssText = "position:fixed;inset:0;z-index:1000001;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.5);font-family:Arial,sans-serif";
       const modal = document.createElement("div");
@@ -640,9 +700,15 @@
       const warningHtml = analysis.warnings.length ? `<div style="padding:10px;margin:10px 0;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px"><strong>Figyelmeztetések</strong><ul>${analysis.warnings.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : "";
       modal.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:12px"><div><h2 style="margin:0 0 6px">Számlázz.hu export ellenőrzés</h2><strong style="color:${analysis.ok ? "#16a34a" : "#dc2626"}">${analysis.ok ? "✅ Rendben" : "⚠️ Ellenőrzést igényel"}</strong></div><button id="se-close">✕</button></div>
+        <div style="padding:12px;margin:14px 0 10px;background:#dbeafe;border:2px solid #2563eb;border-radius:10px;color:#1e3a8a">
+          <small style="font-weight:700;text-transform:uppercase;letter-spacing:.04em">Szűrés és rendezés alapja</small><br>
+          <strong style="font-size:18px">${escapeHtml(dateBasisLabel(dateBasis))}</strong>
+          <span style="margin-left:8px">· ${escapeHtml(sortDirectionLabel(sortDirection))}</span>
+        </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin:14px 0">
           ${[
             ["Típus", mode === "invoice" ? "Kimenő számlák" : "Nyugták"], ["Szűrés", filterLabel],
+            [`Legkorábbi (${dateBasisLabel(dateBasis)})`, analysis.earliestDate || "–"], [`Legkésőbbi (${dateBasisLabel(dateBasis)})`, analysis.latestDate || "–"],
             ["API-ból lekérve", `${result.fetchedCount}${result.expectedTotal !== null ? ` / ${result.expectedTotal}` : ""}`], ["Exportált sorok", result.rows.length],
             ["Összes nettó", `${previewNumber(analysis.totalNet)} Ft`], ["Összes ÁFA", `${previewNumber(analysis.totalVat)} Ft`],
             ["Összes bruttó", `${previewNumber(analysis.totalGross)} Ft`], ["Kulccsal számítva", `${analysis.sources.calculated} db`]
@@ -697,7 +763,9 @@
     const body = document.createElement("div");
 
     const modeSelect = createSelect([["Automatikus felismerés", "auto"], ["Nyugták", "receipt"], ["Kimenő számlák", "invoice"]]);
+    const dateBasisSelect = createSelect([["Dátum alapja: Keltezés dátuma", "issue"], ["Dátum alapja: Teljesítés dátuma", "fulfillment"]]);
     const filterSelect = createSelect([["Összes tétel", "all"], ["Mai nap", "today"], ["Aktuális hét", "week"], ["Aktuális hónap", "month"], ["Aktuális év", "year"], ["Egyedi dátumtartomány", "custom"]]);
+    const sortSelect = createSelect([["Rendezés: Legújabb elöl", "desc"], ["Rendezés: Legrégebbi elöl", "asc"]]);
     const vatSelect = createSelect([["Hiányzó ÁFA pótlása: 27%", "27"], ["Hiányzó ÁFA pótlása: 18%", "18"], ["Hiányzó ÁFA pótlása: 5%", "5"], ["Hiányzó ÁFA pótlása: 0%", "0"], ["Egyedi ÁFA-kulcs", "custom"], ["Ne számolja ki", "none"]]);
     const roundingSelect = createSelect([["Számítás kerekítése: 2 tizedes", "decimal"], ["Számítás kerekítése: egész összeg", "integer"]]);
 
@@ -736,6 +804,8 @@
     const savedVat = localStorage.getItem(STORAGE.vatMode);
     vatSelect.value = [...vatSelect.options].some(option => option.value === savedVat) ? savedVat : "27";
     roundingSelect.value = localStorage.getItem(STORAGE.roundingMode) === "integer" ? "integer" : "decimal";
+    dateBasisSelect.value = localStorage.getItem(STORAGE.dateBasis) === "fulfillment" ? "fulfillment" : "issue";
+    sortSelect.value = localStorage.getItem(STORAGE.sortDirection) === "asc" ? "asc" : "desc";
     customVatInput.value = localStorage.getItem(STORAGE.customVatRate) || "";
 
     function updateWarning() {
@@ -770,6 +840,8 @@
     filterSelect.addEventListener("change", () => {
       dateBox.style.display = filterSelect.value === "custom" ? "flex" : "none";
     });
+    dateBasisSelect.addEventListener("change", () => localStorage.setItem(STORAGE.dateBasis, dateBasisSelect.value));
+    sortSelect.addEventListener("change", () => localStorage.setItem(STORAGE.sortDirection, sortSelect.value));
     vatSelect.addEventListener("change", () => {
       localStorage.setItem(STORAGE.vatMode, vatSelect.value);
       updateWarning();
@@ -788,11 +860,13 @@
         if (filterSelect.value === "custom" && !range.from && !range.to) throw new Error("Adj meg legalább egy dátumot.");
         const fallbackVatRate = selectedVatRate();
         const roundingMode = roundingSelect.value === "integer" ? "integer" : "decimal";
+        const dateBasis = dateBasisSelect.value === "fulfillment" ? "fulfillment" : "issue";
+        const sortDirection = sortSelect.value === "asc" ? "asc" : "desc";
         activeController = new AbortController();
-        const result = await exportMode(mode, range, fallbackVatRate, roundingMode, log, activeController.signal);
+        const result = await exportMode(mode, range, fallbackVatRate, roundingMode, dateBasis, sortDirection, log, activeController.signal);
         if (!result.rows.length) throw new Error("A kiválasztott szűrésre nincs exportálható tétel.");
         const filterLabel = filterSelect.options[filterSelect.selectedIndex]?.textContent || "Ismeretlen szűrés";
-        const confirmed = await showPreview(mode, result, range, filterLabel, fallbackVatRate, roundingMode);
+        const confirmed = await showPreview(mode, result, range, filterLabel, fallbackVatRate, roundingMode, dateBasis, sortDirection);
         if (!confirmed) {
           log(`Másolás megszakítva.\nLekért tételek: ${result.fetchedCount}\nExportált sorok: ${result.rows.length}`);
           return;
@@ -802,7 +876,7 @@
           console.log(output);
           throw new Error("Nem sikerült a vágólapra másolni; az adatok a Console-ban láthatók.");
         }
-        const analysis = analyzeRows(result.rows, result, range);
+        const analysis = analyzeRows(result.rows, result, range, dateBasis);
         log(`Kész, kimásolva.\nExportált sorok: ${result.rows.length}\nÖsszes nettó: ${previewNumber(analysis.totalNet)} Ft\nÖsszes ÁFA: ${previewNumber(analysis.totalVat)} Ft\nÖsszes bruttó: ${previewNumber(analysis.totalGross)} Ft\n\nExcelben Ctrl+V.`);
       } catch (error) {
         if (error?.name === "AbortError") log("A lekérést leállítottad.");
@@ -817,7 +891,7 @@
       }
     });
 
-    body.append(modeSelect, filterSelect, dateBox, vatSelect, customVatInput, roundingSelect, warning, sessionStatus, actionButton, stopButton, status);
+    body.append(modeSelect, dateBasisSelect, filterSelect, dateBox, sortSelect, vatSelect, customVatInput, roundingSelect, warning, sessionStatus, actionButton, stopButton, status);
     panel.append(header, body);
     document.body.appendChild(panel);
 

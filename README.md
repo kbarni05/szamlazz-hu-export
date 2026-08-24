@@ -12,7 +12,7 @@ https://raw.githubusercontent.com/kbarni05/szamlazz-hu-export/main/szamlazz-expo
 
 1. Jelentkezz be a Számlázz.hu oldalára.
 2. Nyisd meg a kimenő számlák vagy a nyugták listáját.
-3. A jobb alsó exportpanelben válaszd ki a típust, dátumszűrést és az esetleges pótló ÁFA-kulcsot.
+3. A jobb alsó exportpanelben válaszd ki a típust, a dátum alapját (keltezés vagy teljesítés), a dátumszűrést, a rendezést és az esetleges pótló ÁFA-kulcsot.
 4. Kattints az **Ellenőrzés és másolás** gombra.
 5. Ellenőrzés után másold az adatokat, majd Excelben nyomj `Ctrl+V`-t.
 
@@ -23,3 +23,10 @@ A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adato
 ## Frissítés
 
 A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja automatikusan ellenőrizni az új verziókat.
+
+## Változások a 3.1.0 verzióban
+
+- Szűrés keltezési vagy teljesítési dátum alapján.
+- Rendezés a kiválasztott dátum szerint, legújabb vagy legrégebbi tétellel kezdve.
+- A választott dátumalap és rendezés megjegyzése a böngészőben.
+- Egyértelmű dátumalap-, legkorábbi- és legkésőbbi-dátum kijelzés az ellenőrző ablakban.
