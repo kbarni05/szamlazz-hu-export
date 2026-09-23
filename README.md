@@ -24,6 +24,12 @@ A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adato
 
 A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja automatikusan ellenőrizni az új verziókat.
 
+## Változások a 3.2.0 verzióban
+
+- A dátumválasztó külön feliratot kapott a számla- és nyugtaexport paneljén; a fejlécben látható a verziószám.
+- Frissítéskor a panel kinyílik, a régi példány paneljét lecseréli.
+- Kis képernyőn a panel görgethető, így a dátumválasztó nem lóg ki a nézetből.
+
 ## Változások a 3.1.0 verzióban
 
 - Szűrés keltezési vagy teljesítési dátum alapján.

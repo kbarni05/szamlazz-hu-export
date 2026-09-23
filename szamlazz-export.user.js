@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.1.0
+// @version      3.2.0
 // @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja választható dátumalappal, rendezéssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
@@ -753,16 +753,24 @@
   }
 
   function createPanel() {
-    if (!document.body || document.getElementById("szamlazz-export-panel")) return;
+    if (!document.body) return;
+    const scriptVersion = "3.2.0";
+    const existingPanel = document.getElementById("szamlazz-export-panel");
+    if (existingPanel?.dataset.exportVersion === scriptVersion) return;
+    existingPanel?.remove();
     const panel = document.createElement("div");
     panel.id = "szamlazz-export-panel";
-    panel.style.cssText = "position:fixed;right:18px;bottom:88px;z-index:999999;width:350px;padding:12px;box-sizing:border-box;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:Arial,sans-serif";
+    panel.dataset.exportVersion = scriptVersion;
+    panel.style.cssText = "position:fixed;right:18px;bottom:88px;z-index:999999;width:min(350px,calc(100vw - 36px));max-height:calc(100vh - 104px);overflow-y:auto;padding:12px;box-sizing:border-box;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:Arial,sans-serif";
     const header = document.createElement("div");
     header.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:9px";
-    header.innerHTML = '<strong>Számlázz.hu export</strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
+    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.0</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
     const body = document.createElement("div");
 
     const modeSelect = createSelect([["Automatikus felismerés", "auto"], ["Nyugták", "receipt"], ["Kimenő számlák", "invoice"]]);
+    const dateBasisHeading = document.createElement("div");
+    dateBasisHeading.textContent = "Másolás dátuma – szűrés és sorrend alapja";
+    dateBasisHeading.style.cssText = "margin:4px 0 6px;color:#bfdbfe;font-size:13px;font-weight:700";
     const dateBasisSelect = createSelect([["Dátum alapja: Keltezés dátuma", "issue"], ["Dátum alapja: Teljesítés dátuma", "fulfillment"]]);
     const filterSelect = createSelect([["Összes tétel", "all"], ["Mai nap", "today"], ["Aktuális hét", "week"], ["Aktuális hónap", "month"], ["Aktuális év", "year"], ["Egyedi dátumtartomány", "custom"]]);
     const sortSelect = createSelect([["Rendezés: Legújabb elöl", "desc"], ["Rendezés: Legrégebbi elöl", "asc"]]);
@@ -891,7 +899,7 @@
       }
     });
 
-    body.append(modeSelect, dateBasisSelect, filterSelect, dateBox, sortSelect, vatSelect, customVatInput, roundingSelect, warning, sessionStatus, actionButton, stopButton, status);
+    body.append(modeSelect, dateBasisHeading, dateBasisSelect, filterSelect, dateBox, sortSelect, vatSelect, customVatInput, roundingSelect, warning, sessionStatus, actionButton, stopButton, status);
     panel.append(header, body);
     document.body.appendChild(panel);
 
@@ -905,7 +913,9 @@
     }
     minimize.addEventListener("click", () => setMinimized(body.style.display !== "none"));
     window.addEventListener("szamlazz-export-session-updated", updateSessionStatus);
-    setMinimized(startMinimized);
+    const panelVersionKey = "szamlazz_export_panel_version";
+    setMinimized(localStorage.getItem(panelVersionKey) === scriptVersion && startMinimized);
+    localStorage.setItem(panelVersionKey, scriptVersion);
     updateWarning();
     updateSessionStatus();
   }
