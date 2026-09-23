@@ -24,6 +24,11 @@ A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adato
 
 A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja automatikusan ellenőrizni az új verziókat.
 
+## Változások a 3.2.1 verzióban
+
+- 401-es válasznál a script törli a saját elavult munkamenet-fejléceit, és egyszer újrapróbálja a kérést az aktuális böngészős munkamenettel.
+- Egyértelmű hibaüzenetet ad, ha új bejelentkezés vagy jogosultság szükséges.
+
 ## Változások a 3.2.0 verzióban
 
 - A dátumválasztó külön feliratot kapott a számla- és nyugtaexport paneljén; a fejlécben látható a verziószám.

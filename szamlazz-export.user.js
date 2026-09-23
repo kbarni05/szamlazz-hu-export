@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.2.0
+// @version      3.2.1
 // @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja választható dátumalappal, rendezéssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
@@ -107,19 +107,10 @@
     const headers = normalizeHeaders(headersLike);
     const companyId = headers["shadow-login-ceg-id"];
     const token = headers["shadow-login-token"];
-    let changed = false;
-
-    if (companyId) {
-      localStorage.setItem(STORAGE.companyId, String(companyId));
-      changed = true;
-    }
-    if (token) {
-      localStorage.setItem(STORAGE.token, String(token));
-      changed = true;
-    }
-    if (changed) {
-      window.dispatchEvent(new CustomEvent("szamlazz-export-session-updated"));
-    }
+    if (!companyId || !token) return;
+    localStorage.setItem(STORAGE.companyId, String(companyId));
+    localStorage.setItem(STORAGE.token, String(token));
+    window.dispatchEvent(new CustomEvent("szamlazz-export-session-updated"));
   }
 
   function installRequestInterceptors() {
@@ -391,17 +382,27 @@
   }
 
   async function postJson(url, projection, body, signal) {
-    const response = await pageWindow().fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: buildHeaders(projection),
-      body: JSON.stringify(body),
-      signal
+    const requestBody = JSON.stringify(body);
+    const request = headers => pageWindow().fetch(url, {
+      method: "POST", credentials: "include", headers, body: requestBody, signal
     });
+    let headers = buildHeaders(projection);
+    let response = await request(headers);
+    if (response.status === 401 && headers["shadow-login-ceg-id"] && headers["shadow-login-token"]) {
+      // A régi munkamenet fejlécei nem írhatják felül az aktuális böngészős bejelentkezést.
+      if (localStorage.getItem(STORAGE.companyId) === headers["shadow-login-ceg-id"]
+        && localStorage.getItem(STORAGE.token) === headers["shadow-login-token"]) {
+        localStorage.removeItem(STORAGE.companyId);
+        localStorage.removeItem(STORAGE.token);
+        window.dispatchEvent(new CustomEvent("szamlazz-export-session-updated"));
+      }
+      headers = buildHeaders(projection);
+      response = await request(headers);
+    }
     const text = await response.text();
     if (!response.ok) {
       const hint = response.status === 401 || response.status === 403
-        ? "\n\nFrissítsd a Számlázz.hu listaoldalt, várd meg a betöltést, majd próbáld újra."
+        ? "\n\nA munkamenet nem érvényes vagy nincs jogosultság. Jelentkezz be újra, frissítsd a számla- vagy nyugtalistát, várd meg a betöltést, majd próbáld újra."
         : "";
       throw new Error(`API hiba: ${response.status} ${response.statusText}${hint}\n\n${text || "Nincs válaszszöveg."}`);
     }
@@ -754,7 +755,7 @@
 
   function createPanel() {
     if (!document.body) return;
-    const scriptVersion = "3.2.0";
+    const scriptVersion = "3.2.1";
     const existingPanel = document.getElementById("szamlazz-export-panel");
     if (existingPanel?.dataset.exportVersion === scriptVersion) return;
     existingPanel?.remove();
@@ -764,7 +765,7 @@
     panel.style.cssText = "position:fixed;right:18px;bottom:88px;z-index:999999;width:min(350px,calc(100vw - 36px));max-height:calc(100vh - 104px);overflow-y:auto;padding:12px;box-sizing:border-box;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:Arial,sans-serif";
     const header = document.createElement("div");
     header.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:9px";
-    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.0</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
+    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.1</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
     const body = document.createElement("div");
 
     const modeSelect = createSelect([["Automatikus felismerés", "auto"], ["Nyugták", "receipt"], ["Kimenő számlák", "invoice"]]);
