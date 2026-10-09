@@ -24,6 +24,24 @@ A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adato
 
 A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja automatikusan ellenőrizni az új verziókat.
 
+## Változások a 3.2.2 verzióban
+
+- Az elavult munkamenet-fejlécek törlése és az egyszeri újrapróbálás már 403-as válasznál is működik. Ha közben új munkamenetet ismert fel a script, azt használja az újrapróbáláshoz.
+- A tömbként átadott fejléceket is felismeri; `fetch` esetén a ténylegesen használt fejléceket, XHR esetén a teljes fejlécpárt jegyzi meg.
+- Az export saját kérései nem írják felül az oldalról újonnan felismert munkamenetet.
+
+Frissítsd a userscriptet a fenti telepítési linkről, majd töltsd újra a Számlázz.hu listaoldalát. Ha a 403-as hiba megmarad, ellenőrizd, hogy a kívánt cég számla- vagy nyugtalistája az oldalon is betöltődik-e; szükség esetén jelentkezz be újra vagy ellenőrizd a hozzáférésedet.
+
+## Tesztelés
+
+A munkamenet-kezelés regressziós tesztjei Node.js 18 vagy újabb verzióval, külön függőség nélkül futtathatók:
+
+```sh
+node tests/session.test.cjs
+```
+
+A tesztek szimulált API-válaszokat használnak; éles ellenőrzéshez bejelentkezett böngésző szükséges.
+
 ## Változások a 3.2.1 verzióban
 
 - 401-es válasznál a script törli a saját elavult munkamenet-fejléceit, és egyszer újrapróbálja a kérést az aktuális böngészős munkamenettel.
@@ -41,3 +59,4 @@ A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadUR
 - Rendezés a kiválasztott dátum szerint, legújabb vagy legrégebbi tétellel kezdve.
 - A választott dátumalap és rendezés megjegyzése a böngészőben.
 - Egyértelmű dátumalap-, legkorábbi- és legkésőbbi-dátum kijelzés az ellenőrző ablakban.
+
