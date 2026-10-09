@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.2.2
+// @version      3.2.3
 // @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja választható dátumalappal, rendezéssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
@@ -74,6 +74,12 @@
 
   let activeController = null;
   const exportRequests = new WeakSet();
+  const observedApi = {};
+  let sessionHeaders = {};
+
+  // A korábbi oldalbetöltés cég- és tokenpárja nem az aktuális munkamenet.
+  localStorage.removeItem(STORAGE.companyId);
+  localStorage.removeItem(STORAGE.token);
 
   function pageWindow() {
     try {
@@ -104,13 +110,28 @@
     return result;
   }
 
-  function rememberSessionHeaders(headersLike) {
+  function rememberSessionHeaders(headersLike, requestUrl) {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(requestUrl, "https://www.szamlazz.hu");
+    } catch (_) { return; }
+    if (parsedUrl.origin !== "https://www.szamlazz.hu" || !parsedUrl.pathname.includes("/pcapi/")) return;
     const headers = normalizeHeaders(headersLike);
     const companyId = headers["shadow-login-ceg-id"];
     const token = headers["shadow-login-token"];
-    if (!companyId || !token) return;
-    localStorage.setItem(STORAGE.companyId, String(companyId));
-    localStorage.setItem(STORAGE.token, String(token));
+    const mode = /\/pcapi\/szfej\/list\/?$/.test(parsedUrl.pathname) ? "invoice"
+      : /\/pcapi\/nyfej\/list\/all\/?$/.test(parsedUrl.pathname) ? "receipt" : null;
+    if (mode) observedApi[mode] = parsedUrl.origin + parsedUrl.pathname;
+    if (Boolean(companyId) !== Boolean(token)) return;
+    if ((!companyId || !token) && !mode) return;
+    sessionHeaders = {};
+    for (const name of ["authorization", "x-csrf-token", "x-xsrf-token", "csrf-token"]) {
+      if (headers[name]) sessionHeaders[name] = String(headers[name]);
+    }
+    if (companyId && token) {
+      sessionHeaders["shadow-login-ceg-id"] = String(companyId);
+      sessionHeaders["shadow-login-token"] = String(token);
+    }
     window.dispatchEvent(new CustomEvent("szamlazz-export-session-updated"));
   }
 
@@ -123,7 +144,8 @@
           // A fetch init.headers teljesen felülírja a Request fejléceit.
           // Az export saját kérései nem számítanak frissen felismert munkamenetnek.
           if (!exportRequests.has(init)) {
-            rememberSessionHeaders(init?.headers !== undefined ? init.headers : input?.headers);
+            rememberSessionHeaders(init?.headers !== undefined ? init.headers : input?.headers,
+              typeof input === "string" ? input : input?.url || input?.href);
           }
         } catch (_) {}
         return originalFetch.apply(this, arguments);
@@ -140,6 +162,7 @@
 
     proto.open = function () {
       this.__szamlazzExportHeaders = {};
+      this.__szamlazzExportUrl = arguments[1];
       return originalOpen.apply(this, arguments);
     };
     proto.setRequestHeader = function (name, value) {
@@ -148,7 +171,7 @@
       return originalSetHeader.apply(this, arguments);
     };
     proto.send = function () {
-      rememberSessionHeaders(this.__szamlazzExportHeaders);
+      rememberSessionHeaders(this.__szamlazzExportHeaders, this.__szamlazzExportUrl);
       return originalSend.apply(this, arguments);
     };
     proto.__szamlazzExportPatched = true;
@@ -375,16 +398,13 @@
       "content-type": "application/json",
       projection
     };
-    const companyId = localStorage.getItem(STORAGE.companyId);
-    const token = localStorage.getItem(STORAGE.token);
-    if (companyId && token) {
-      headers["shadow-login-ceg-id"] = companyId;
-      headers["shadow-login-token"] = token;
-    }
+    Object.assign(headers, sessionHeaders);
     return headers;
   }
 
   async function postJson(url, projection, body, signal) {
+    const mode = url === API.invoice ? "invoice" : url === API.receipt ? "receipt" : null;
+    url = observedApi[mode] || url;
     const requestBody = JSON.stringify(body);
     const request = headers => {
       const init = { method: "POST", credentials: "include", headers, body: requestBody, signal };
@@ -392,20 +412,22 @@
       return pageWindow().fetch(url, init);
     };
     let headers = buildHeaders(projection);
+    const requestSession = sessionHeaders;
     let response = await request(headers);
-    if ((response.status === 401 || response.status === 403)
+    let text = await response.text();
+    const isHtml = () => /text\/html/i.test(response.headers?.get("content-type") || "")
+      || /^\s*</.test(text.replace(/^\uFEFF/, ""));
+    if ((response.status === 401 || response.status === 403 || (response.ok && isHtml()))
       && headers["shadow-login-ceg-id"] && headers["shadow-login-token"]) {
       // A régi munkamenet fejlécei nem írhatják felül az aktuális böngészős bejelentkezést.
-      if (localStorage.getItem(STORAGE.companyId) === headers["shadow-login-ceg-id"]
-        && localStorage.getItem(STORAGE.token) === headers["shadow-login-token"]) {
-        localStorage.removeItem(STORAGE.companyId);
-        localStorage.removeItem(STORAGE.token);
+      if (sessionHeaders === requestSession) {
+        sessionHeaders = {};
         window.dispatchEvent(new CustomEvent("szamlazz-export-session-updated"));
       }
       headers = buildHeaders(projection);
       response = await request(headers);
+      text = await response.text();
     }
-    const text = await response.text();
     if (!response.ok) {
       const hint = response.status === 401 || response.status === 403
         ? "\n\nA munkamenet nem érvényes vagy nincs jogosultság. Jelentkezz be újra, frissítsd a számla- vagy nyugtalistát, várd meg a betöltést, majd próbáld újra."
@@ -413,9 +435,15 @@
       throw new Error(`API hiba: ${response.status} ${response.statusText}${hint}\n\n${text || "Nincs válaszszöveg."}`);
     }
     try {
-      return JSON.parse(text);
+      // Az Angular által támogatott XSSI-előtag és a BOM nem része a JSON-nak.
+      const json = text.replace(/^\uFEFF/, "").trim().replace(/^\)\]\}',?\r?\n/, "");
+      return JSON.parse(json);
     } catch (_) {
-      throw new Error("A Számlázz.hu válasza nem értelmezhető JSON-ként.");
+      const contentType = (response.headers?.get("content-type") || "ismeretlen").split(";")[0];
+      let path = "ismeretlen";
+      try { path = new URL(response.url || url).pathname; } catch (_) {}
+      const kind = isHtml() ? "HTML-oldalt" : text.trim() ? "nem értelmezhető szöveget" : "üres választ";
+      throw new Error(`A Számlázz.hu API JSON helyett ${kind} küldött.\nHTTP: ${response.status}; típus: ${contentType}; átirányítás: ${response.redirected ? "igen" : "nem"}; útvonal: ${path}\nFrissítsd a számla- vagy nyugtalistát, várd meg a betöltést, majd próbáld újra. Ha bejelentkezési oldalra irányított át, jelentkezz be újra.`);
     }
   }
 
@@ -564,6 +592,9 @@
         ? { kimeno: true, page, pageSize, orderBy: { orderBy: "ORDERBY_KELTDAT", ascending: false } }
         : { searchKey: "", page, pageSize };
       const data = await postJson(url, projection, body, signal);
+      if (!Array.isArray(data?.items)) {
+        throw new Error("Az API válasza nem tartalmaz számla- vagy nyugtalistát (items). Frissítsd a listaoldalt, majd próbáld újra.");
+      }
       const items = itemsOf(data);
       if (expectedTotal === null) expectedTotal = totalOf(data);
 
@@ -761,7 +792,7 @@
 
   function createPanel() {
     if (!document.body) return;
-    const scriptVersion = "3.2.2";
+    const scriptVersion = "3.2.3";
     const existingPanel = document.getElementById("szamlazz-export-panel");
     if (existingPanel?.dataset.exportVersion === scriptVersion) return;
     existingPanel?.remove();
@@ -771,7 +802,7 @@
     panel.style.cssText = "position:fixed;right:18px;bottom:88px;z-index:999999;width:min(350px,calc(100vw - 36px));max-height:calc(100vh - 104px);overflow-y:auto;padding:12px;box-sizing:border-box;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:Arial,sans-serif";
     const header = document.createElement("div");
     header.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:9px";
-    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.2</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
+    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.3</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
     const body = document.createElement("div");
 
     const modeSelect = createSelect([["Automatikus felismerés", "auto"], ["Nyugták", "receipt"], ["Kimenő számlák", "invoice"]]);
@@ -830,8 +861,8 @@
         : `A hiányzó ÁFA és bruttó ${vatSelect.value === "custom" ? "az egyedi kulcs" : `${vatSelect.value}%`} alapján lesz kiszámítva. Vegyes ÁFA-kulcsú bizonylatoknál válassz megfelelőbb módszert.`;
     }
     function updateSessionStatus() {
-      const companyId = localStorage.getItem(STORAGE.companyId);
-      const token = localStorage.getItem(STORAGE.token);
+      const companyId = sessionHeaders["shadow-login-ceg-id"];
+      const token = sessionHeaders["shadow-login-token"];
       sessionStatus.textContent = companyId && token
         ? `Munkamenet felismerve · Cég ID: ${companyId}`
         : "A böngésző aktuális Számlázz.hu munkamenetét használom. Ha jogosultsági hiba jelenik meg, frissítsd a listaoldalt.";
