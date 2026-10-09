@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Számlázz.hu teljes export szűrővel és ÁFA-számítással
 // @namespace    https://github.com/kbarni05/szamlazz-hu-export
-// @version      3.2.1
+// @version      3.2.2
 // @description  Kimenő számlák és nyugták ellenőrzött, Excelbe másolható exportja választható dátumalappal, rendezéssel és opcionális ÁFA-számítással
 // @author       kbarni05
 // @homepageURL  https://github.com/kbarni05/szamlazz-hu-export
@@ -73,6 +73,7 @@
   };
 
   let activeController = null;
+  const exportRequests = new WeakSet();
 
   function pageWindow() {
     try {
@@ -86,14 +87,14 @@
     const result = {};
     if (!headersLike) return result;
     try {
-      if (typeof headersLike.forEach === "function") {
-        headersLike.forEach((value, key) => {
-          result[String(key).toLowerCase()] = value;
-        });
-      } else if (Array.isArray(headersLike)) {
+      if (Array.isArray(headersLike)) {
         for (const [key, value] of headersLike) {
           result[String(key).toLowerCase()] = value;
         }
+      } else if (typeof headersLike.forEach === "function") {
+        headersLike.forEach((value, key) => {
+          result[String(key).toLowerCase()] = value;
+        });
       } else if (typeof headersLike === "object") {
         for (const [key, value] of Object.entries(headersLike)) {
           result[String(key).toLowerCase()] = value;
@@ -119,8 +120,11 @@
     if (typeof originalFetch === "function" && !originalFetch.__szamlazzExportPatched) {
       const patchedFetch = function (input, init) {
         try {
-          rememberSessionHeaders(init?.headers);
-          rememberSessionHeaders(input?.headers);
+          // A fetch init.headers teljesen felülírja a Request fejléceit.
+          // Az export saját kérései nem számítanak frissen felismert munkamenetnek.
+          if (!exportRequests.has(init)) {
+            rememberSessionHeaders(init?.headers !== undefined ? init.headers : input?.headers);
+          }
         } catch (_) {}
         return originalFetch.apply(this, arguments);
       };
@@ -140,8 +144,7 @@
     };
     proto.setRequestHeader = function (name, value) {
       this.__szamlazzExportHeaders ||= {};
-      this.__szamlazzExportHeaders[name] = value;
-      rememberSessionHeaders(this.__szamlazzExportHeaders);
+      this.__szamlazzExportHeaders[String(name).toLowerCase()] = value;
       return originalSetHeader.apply(this, arguments);
     };
     proto.send = function () {
@@ -383,12 +386,15 @@
 
   async function postJson(url, projection, body, signal) {
     const requestBody = JSON.stringify(body);
-    const request = headers => pageWindow().fetch(url, {
-      method: "POST", credentials: "include", headers, body: requestBody, signal
-    });
+    const request = headers => {
+      const init = { method: "POST", credentials: "include", headers, body: requestBody, signal };
+      exportRequests.add(init);
+      return pageWindow().fetch(url, init);
+    };
     let headers = buildHeaders(projection);
     let response = await request(headers);
-    if (response.status === 401 && headers["shadow-login-ceg-id"] && headers["shadow-login-token"]) {
+    if ((response.status === 401 || response.status === 403)
+      && headers["shadow-login-ceg-id"] && headers["shadow-login-token"]) {
       // A régi munkamenet fejlécei nem írhatják felül az aktuális böngészős bejelentkezést.
       if (localStorage.getItem(STORAGE.companyId) === headers["shadow-login-ceg-id"]
         && localStorage.getItem(STORAGE.token) === headers["shadow-login-token"]) {
@@ -755,7 +761,7 @@
 
   function createPanel() {
     if (!document.body) return;
-    const scriptVersion = "3.2.1";
+    const scriptVersion = "3.2.2";
     const existingPanel = document.getElementById("szamlazz-export-panel");
     if (existingPanel?.dataset.exportVersion === scriptVersion) return;
     existingPanel?.remove();
@@ -765,7 +771,7 @@
     panel.style.cssText = "position:fixed;right:18px;bottom:88px;z-index:999999;width:min(350px,calc(100vw - 36px));max-height:calc(100vh - 104px);overflow-y:auto;padding:12px;box-sizing:border-box;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:Arial,sans-serif";
     const header = document.createElement("div");
     header.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:9px";
-    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.1</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
+    header.innerHTML = '<strong>Számlázz.hu export <small style="color:#93c5fd">v3.2.2</small></strong><button id="se-minimize" title="Panel összecsukása" style="border:0;border-radius:6px;padding:3px 8px;cursor:pointer">−</button>';
     const body = document.createElement("div");
 
     const modeSelect = createSelect([["Automatikus felismerés", "auto"], ["Nyugták", "receipt"], ["Kimenő számlák", "invoice"]]);
@@ -928,3 +934,4 @@
 
   waitForBody();
 })();
+
