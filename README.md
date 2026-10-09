@@ -18,11 +18,22 @@ https://raw.githubusercontent.com/kbarni05/szamlazz-hu-export/main/szamlazz-expo
 
 ## Biztonság
 
-A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adatot. A script kizárólag a böngésző aktuális Számlázz.hu munkamenetét használja, és az esetleg szükséges munkamenet-fejléceket helyben, a böngészőben jegyzi meg.
+A repó nem tartalmaz tokent, cookie-t, jelszót vagy más bejelentkezési adatot. A script kizárólag a böngésző aktuális Számlázz.hu munkamenetét használja. A munkamenet-fejléceket az adott oldalbetöltés memóriájában tartja, nem menti el őket a következő oldalbetöltésre.
 
 ## Frissítés
 
-A Tampermonkey az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja automatikusan ellenőrizni az új verziókat.
+A Tampermonkey és a ScriptCat az userscript fejlécében megadott `@updateURL` és `@downloadURL` alapján tudja ellenőrizni az új verziókat. ScriptCatban a script Settings fülén a Check Update kapcsolót is engedélyezni kell. Minden kiadott javítás verziószám-emeléssel a `main` ágra kerül.
+
+## Változások a 3.2.3 verzióban
+
+- A JSON-válasz elején álló BOM és a szokásos XSSI-védelmi előtag feldolgozása.
+- A korábbi oldalbetöltésből mentett cégazonosító és token törlése; az export csak az aktuális oldal API-kéréseiből felismert munkamenetet használja.
+- A számla- és nyugtalista tényleges API-útvonalának felismerése, valamint az oldaltól átvett hitelesítési és CSRF-fejlécek használata.
+- A más webhelyre vagy nem API-útvonalra küldött kérések nem írhatják felül az export munkamenetét.
+- HTML-válasz esetén az elavult fejlécpárral küldött kérés egyszeri újrapróbálása. Tartós HTML-, üres vagy hibás válasznál HTTP-státusz, válaszformátum, átirányítás és útvonal jelenik meg; a válasz tartalma és az URL paraméterei nem kerülnek ebbe a hibaüzenetbe.
+- A lista nélküli JSON-válasz egyértelmű hibát ad.
+
+Frissítés után töltsd újra a Számlázz.hu listaoldalát, és várd meg, amíg a számlák vagy nyugták betöltődnek, hogy a script felismerje az aktuális munkamenetet. Ha az API továbbra sem küld JSON-listát, a panel részletes hibaüzenete segít az ok megállapításában.
 
 ## Változások a 3.2.2 verzióban
 
